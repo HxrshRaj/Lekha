@@ -39,15 +39,17 @@ def plan(c, sql: str) -> str:
     cur = c.cursor()
     cur.execute("SET SHOWPLAN_TEXT ON")
     cur.execute(sql)
-    text = "\n".join(str(r[0]) for r in cur.fetchall())
+    parts = [str(r[0]) for r in cur.fetchall()]
+    while cur.nextset():
+        parts += [str(r[0]) for r in cur.fetchall()]
     cur.execute("SET SHOWPLAN_TEXT OFF")
-    return text
+    return "\n".join(parts[1:] if len(parts) > 1 else parts)  # first row echoes the statement
 
 
-def main(scale: float, out: Path) -> None:
-    t, truth, stg, q, _ = build(42, scale)
-    conn = sqlserver.connect("master")
-    sqlserver.build_database(conn, stg, truth, str(AS_OF.date()))
+def main(scale: float, out: Path, reuse: bool = False) -> None:
+    if not reuse:
+        _, truth, stg, _, _ = build(42, scale)
+        sqlserver.build_database(sqlserver.connect("master"), stg, truth, str(AS_OF.date()))
     c = sqlserver.connect("lekha")
     cur = c.cursor()
     cur.execute("SELECT @@VERSION"); version = cur.fetchone()[0].splitlines()[0]
@@ -86,6 +88,7 @@ The indexed view has a unique clustered index on (PERIOD, HKONT, SHKZG), maintai
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=1.0)
+    ap.add_argument("--reuse", action="store_true", help="measure the already-loaded database")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[2] / "docs" / "perf_indexed_view.md"))
     a = ap.parse_args()
-    main(a.scale, Path(a.out))
+    main(a.scale, Path(a.out), a.reuse)

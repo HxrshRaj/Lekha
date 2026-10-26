@@ -12,7 +12,7 @@ from lekha.tables import AS_OF, DIRECT
 
 pytestmark = pytest.mark.skipif(os.environ.get("LEKHA_RUN_SQL") != "1", reason="set LEKHA_RUN_SQL=1 with a reachable SQL Server")
 
-SCALE = 0.1
+SCALE = float(os.environ.get("LEKHA_SQL_SCALE", "0.1"))
 
 
 @pytest.fixture(scope="module")
