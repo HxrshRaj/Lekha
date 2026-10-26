@@ -1,0 +1,61 @@
+// Lekha - Power BI measures. NOT built or tested in Power BI by the author of this repo (see powerbi/README.md).
+// Tables: dim_date, dim_customer, dim_material, dim_cost_centre, dim_account, fact_invoice, fact_otif_order, fact_gl, fact_budget.
+// Data is SYNTHETIC and SAP-STYLE (simplified).
+
+// ---------- Receivables ----------
+Invoiced Amount = SUM ( fact_invoice[NETWR] )
+
+Open AR =
+CALCULATE ( SUM ( fact_invoice[NETWR] ), fact_invoice[IsOpen] = 1 )
+
+Overdue 90+ = CALCULATE ( [Open AR], fact_invoice[Bucket] = "90+" )   // Bucket / DaysOverdue are precomputed by lekha.powerbi
+
+Overdue 90+ % = DIVIDE ( [Overdue 90+], [Open AR] )
+
+// DSO = open AR at period end / credit sales in trailing 90 days * 90
+DSO =
+VAR PeriodEnd = MAX ( dim_date[Date] )
+VAR OpenAtEnd =
+    CALCULATE (
+        SUM ( fact_invoice[NETWR] ),
+        FILTER (
+            ALL ( fact_invoice ),
+            LOOKUPVALUE ( dim_date[Date], dim_date[DateKey], fact_invoice[InvoiceDateKey] ) <= PeriodEnd
+                && ( ISBLANK ( fact_invoice[PaidDateKey] )
+                     || LOOKUPVALUE ( dim_date[Date], dim_date[DateKey], fact_invoice[PaidDateKey] ) > PeriodEnd )
+        )
+    )
+VAR Sales90 =
+    CALCULATE (
+        SUM ( fact_invoice[NETWR] ),
+        DATESINPERIOD ( dim_date[Date], PeriodEnd, -90, DAY )
+    )
+RETURN DIVIDE ( OpenAtEnd * 90, Sales90 )
+
+Avg Days To Pay = AVERAGE ( fact_invoice[DaysToPay] )
+
+// ---------- Order to cash ----------
+OTIF % = DIVIDE ( SUM ( fact_otif_order[OTIF] ), COUNTROWS ( fact_otif_order ) )
+On Time % = DIVIDE ( SUM ( fact_otif_order[OnTime] ), COUNTROWS ( fact_otif_order ) )
+In Full % = DIVIDE ( SUM ( fact_otif_order[InFull] ), COUNTROWS ( fact_otif_order ) )
+
+// ---------- Finance ----------
+Revenue =
+CALCULATE ( -SUM ( fact_gl[SignedAmount] ), dim_account[GRP] = "REV" )
+
+COGS =
+CALCULATE ( SUM ( fact_gl[SignedAmount] ), dim_account[GRP] = "COGS" )
+
+Opex Actual =
+CALCULATE ( SUM ( fact_gl[SignedAmount] ), dim_account[GRP] = "OPEX" )
+
+Gross Profit = [Revenue] - [COGS]
+Gross Margin % = DIVIDE ( [Gross Profit], [Revenue] )
+EBIT = [Gross Profit] - [Opex Actual]
+
+Opex Budget = SUM ( fact_budget[AMT_BUDGET] )
+Budget Variance = [Opex Actual] - [Opex Budget]
+Budget Variance % = DIVIDE ( [Budget Variance], [Opex Budget] )
+
+Opex Actual YTD = TOTALYTD ( [Opex Actual], dim_date[Date] )
+Opex Budget YTD = TOTALYTD ( [Opex Budget], dim_date[Date] )

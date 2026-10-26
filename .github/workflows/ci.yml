@@ -1,0 +1,90 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests (pandas KPIs, analytics, API, Excel + LibreOffice recalculation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install LibreOffice (headless recalculation test)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc
+      - run: pip install -r backend/requirements-dev.txt
+      - name: pytest
+        working-directory: backend
+        run: python -m pytest -v -rs
+      - name: Pipeline reproduces committed results (determinism)
+        working-directory: backend
+        run: |
+          python -m lekha.pipeline --out /tmp/results
+          python - <<'PY'
+          import json
+          a = json.load(open("results/results.json")); b = json.load(open("/tmp/results/results.json"))
+          assert a["kpis"] == b["kpis"], (a["kpis"], b["kpis"])
+          assert a["data_quality"]["total_quarantined"] == b["data_quality"]["total_quarantined"]
+          print("committed results match a fresh run")
+          PY
+
+  sqlserver:
+    name: T-SQL layer on SQL Server 2022 (service container)
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Lekha_Passw0rd!
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Lekha_Passw0rd!' -Q 'SELECT 1'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+    env:
+      LEKHA_RUN_SQL: "1"
+      LEKHA_SQL_HOST: localhost
+      LEKHA_SQL_PORT: "1433"
+      LEKHA_SQL_PASSWORD: Lekha_Passw0rd!
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r backend/requirements-dev.txt
+      - name: SQL vs pandas KPI tests, quarantine rules, constraints
+        working-directory: backend
+        run: python -m pytest tests/test_sql_vs_pandas.py -v -rs
+      - name: Indexed view before/after measurement (full scale)
+        working-directory: backend
+        run: python -m lekha.perf --scale 1.0 --out ../docs/perf_indexed_view_ci.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-indexed-view
+          path: docs/perf_indexed_view_ci.md
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+      - run: npm run build
